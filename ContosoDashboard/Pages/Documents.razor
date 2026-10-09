@@ -1,0 +1,284 @@
+@page "/documents"
+@using ContosoDashboard.Services
+@using ContosoDashboard.Models
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Security.Claims
+@attribute [Authorize]
+@inject IDocumentService DocumentService
+@inject IProjectService ProjectService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>My Documents - ContosoDashboard</PageTitle>
+
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h1>My Documents</h1>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" @onclick="ShowUploadModal">
+                <i class="bi bi-upload"></i> Upload Document
+            </button>
+        </div>
+    </div>
+
+    @if (documents == null)
+    {
+        <p><em>Loading...</em></p>
+    }
+    else if (!documents.Any())
+    {
+        <div class="alert alert-info">No documents yet. Upload your first document to get started.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Category</th>
+                        <th>Project</th>
+                        <th>Upload Date</th>
+                        <th>Size</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var document in documents)
+                    {
+                        <tr>
+                            <td>@document.Title</td>
+                            <td>@document.Category</td>
+                            <td>@(document.Project?.Name ?? "—")</td>
+                            <td>@document.UploadDate.ToLocalTime().ToString("g")</td>
+                            <td>@FormatFileSize(document.FileSizeBytes)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@if (isUploadModalVisible)
+{
+    <div class="modal-backdrop show"></div>
+    <div class="modal d-block" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Upload Document</h5>
+                    <button type="button" class="btn-close" @onclick="CloseUploadModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrEmpty(uploadErrorMessage))
+                    {
+                        <div class="alert alert-danger">@uploadErrorMessage</div>
+                    }
+                    @if (!string.IsNullOrEmpty(uploadSuccessMessage))
+                    {
+                        <div class="alert alert-success">@uploadSuccessMessage</div>
+                    }
+
+                    <div class="mb-3">
+                        <label class="form-label">File</label>
+                        <InputFile @key="inputFileKey" OnChange="OnFileSelected" class="form-control" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Title *</label>
+                        <input class="form-control" @bind="title" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Category *</label>
+                        <select class="form-select" @bind="category">
+                            @foreach (var c in DocumentCategories.All)
+                            {
+                                <option value="@c">@c</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" @bind="description"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Project</label>
+                        <select class="form-select" @bind="selectedProjectId">
+                            <option value="">None</option>
+                            @foreach (var project in myProjects)
+                            {
+                                <option value="@project.ProjectId">@project.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tags (comma-separated)</label>
+                        <input class="form-control" @bind="tags" />
+                    </div>
+
+                    @if (isUploading)
+                    {
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseUploadModal">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SubmitUploadAsync" disabled="@isUploading">Upload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Document>? documents;
+    private List<Project> myProjects = new();
+    private int currentUserId = 0;
+
+    private bool isUploadModalVisible = false;
+    private bool isUploading = false;
+    private string? uploadErrorMessage;
+    private string? uploadSuccessMessage;
+    private Guid inputFileKey = Guid.NewGuid();
+
+    private IBrowserFile? selectedFile;
+    private string title = string.Empty;
+    private string category = DocumentCategories.Other;
+    private string? description;
+    private string selectedProjectId = string.Empty;
+    private string? tags;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var userIdClaim = authState.User.FindFirst(ClaimTypes.NameIdentifier);
+        if (userIdClaim != null && int.TryParse(userIdClaim.Value, out int userId))
+        {
+            currentUserId = userId;
+        }
+
+        if (currentUserId > 0)
+        {
+            await LoadDocumentsAsync();
+            myProjects = await ProjectService.GetUserProjectsAsync(currentUserId);
+        }
+    }
+
+    private async Task LoadDocumentsAsync()
+    {
+        documents = await DocumentService.GetMyDocumentsAsync(currentUserId);
+    }
+
+    private void ShowUploadModal()
+    {
+        ResetUploadForm();
+        isUploadModalVisible = true;
+    }
+
+    private void CloseUploadModal()
+    {
+        isUploadModalVisible = false;
+    }
+
+    private void ResetUploadForm()
+    {
+        selectedFile = null;
+        title = string.Empty;
+        category = DocumentCategories.Other;
+        description = null;
+        selectedProjectId = string.Empty;
+        tags = null;
+        uploadErrorMessage = null;
+        uploadSuccessMessage = null;
+        inputFileKey = Guid.NewGuid();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+    }
+
+    private async Task SubmitUploadAsync()
+    {
+        uploadErrorMessage = null;
+        uploadSuccessMessage = null;
+
+        if (selectedFile == null)
+        {
+            uploadErrorMessage = "Please select a file.";
+            return;
+        }
+
+        // Extract metadata before opening the stream, per the stakeholder doc's
+        // Blazor-specific implementation notes (prevents IBrowserFile disposal issues).
+        var fileName = selectedFile.Name;
+        var fileSize = selectedFile.Size;
+        var contentType = selectedFile.ContentType;
+
+        isUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            using var memoryStream = new MemoryStream();
+            using (var fileStream = selectedFile.OpenReadStream(DocumentUploadLimits.MaxFileSizeBytes))
+            {
+                await fileStream.CopyToAsync(memoryStream);
+            }
+            memoryStream.Position = 0;
+
+            selectedFile = null; // Clear reference to prevent reuse
+
+            int? projectId = int.TryParse(selectedProjectId, out var parsedProjectId) ? parsedProjectId : null;
+
+            var result = await DocumentService.UploadAsync(
+                memoryStream,
+                fileName,
+                contentType,
+                fileSize,
+                title,
+                description,
+                category,
+                projectId,
+                tags,
+                currentUserId);
+
+            if (result.Success)
+            {
+                uploadSuccessMessage = "Document uploaded successfully.";
+                await LoadDocumentsAsync();
+                ResetUploadForm();
+                isUploadModalVisible = false;
+            }
+            else
+            {
+                uploadErrorMessage = result.ErrorMessage;
+            }
+        }
+        catch (IOException)
+        {
+            uploadErrorMessage = "The selected file exceeds the 25 MB size limit.";
+        }
+        finally
+        {
+            isUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] units = { "B", "KB", "MB", "GB" };
+        double size = bytes;
+        int unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.Length - 1)
+        {
+            size /= 1024;
+            unitIndex++;
+        }
+        return $"{size:0.##} {units[unitIndex]}";
+    }
+}
